@@ -1,0 +1,269 @@
+#! /usr/bin/env python3
+import argparse
+from enum import Enum
+import copy
+from typing import List, Tuple, Callable
+
+Position = Tuple[int, int]
+
+def up(pos: Position) -> Position:
+    return (pos[0], pos[1] - 1)
+def down(pos: Position) -> Position:
+    return (pos[0], pos[1] + 1)
+def left(pos: Position)  -> Position:
+    return (pos[0] - 1, pos[1])
+def right(pos: Position) -> Position:
+    return (pos[0] + 1, pos[1])
+
+MovementFunction = Callable[[Position], Position]
+
+class Tile(Enum):
+    OUT_OF_BOUNDS = 0
+    BLANK = 1
+    BLOCK = 2
+    SPIRAL = 3
+    ENEMY = 4
+    PLAYER = 5
+
+    def __str__(self):
+        if self == self.BLANK:
+            return '.'
+        if self == self.BLOCK:
+            return '#'
+        if self == self.SPIRAL:
+            return '@'
+        if self == self.ENEMY:
+            return '!'
+        if self == self.PLAYER:
+            return 'p'
+        return '?'
+
+class Move(Enum):
+    UP = 1
+    DOWN = 2
+    LEFT = 3
+    RIGHT = 4
+    CHANGE = 5
+
+class MoveOutcome(Enum):
+    UNDETERMINED = 1
+    NOTHING = 2
+    MOVED = 3
+    CHANGED = 4
+    PLAYER_WON = 5
+    ENEMY_WON = 6
+    PLAYER_CRUSHED = 7
+    PLAYER_KILLED = 8
+
+    def is_ending(self):
+        return self == PLAYER_WON or PLAYER_KILLED or PLAYER_CRUSHED or ENEMY_WON
+
+class ActivePlayer(Enum):
+    WHITE = 1
+    BLACK = 2
+    def change(self):
+        return WHITE if self == BLACK else BLACK
+
+class LevelState:
+    field_white = None
+    field_black = None
+    active_player = None
+    outcome = MoveOutcome.UNDETERMINED
+    exit_pos: Position
+
+    width : int
+    height : int
+
+    def active_field(self):
+        if self.active_player == WHITE:
+            return self.field_white
+        if self.active_player == BLACK:
+            return self.field_black
+
+    def player_pos(self):
+        active_field = self.active_field()
+        for x in range (self.width):
+            for y in range (self.height):
+                if active_field[x][y] == Tile.PLAYER:
+                    return (x, y)
+
+    def tile(self, pos: Position):
+        if pos[0] < 0 or pos[0] >= self.width:
+            return Tile.OUT_OF_BOUNDS
+        if pos[1] < 0 or pos[1] >= self.height:
+            return Tile.OUT_OF_BOUNDS
+        active_field = self.active_field()
+        return active_field[pos[0]][pos[1]]
+
+    def set_tile(self, pos: Position, tile: Tile):
+        assert(pos[0] >= 0 and pos[0] < self.width and pos[1] >= 0 or pos[1] < self.height)
+        active_field = self.active_field()
+        active_field[pos[0]][pos[1]] = tile
+
+    def is_stopping(self, pos: Position):
+        active_field = self.active_field()
+        tile = self.tile(pos)
+        return tile == Tile.INVALID or Tile.BLOCK
+
+    def is_killing(self, pos: Position):
+        active_field = self.active_field()
+        tile = self.tile(pos)
+        return tile == Tile.ENEMY or Tile.SPIRAL
+
+    def active_field(self):
+        if self.active_player == ActivePlayer.WHITE:
+            return self.field_white
+        if self.active_player == ActivePlayer.BLACK:
+            return self.field_black
+
+    def apply_direction_to_entity(self, dir_func = MovementFunction, start_pos = Position) -> Tuple[MoveOutcome, Position]:
+        player = self.tile(start_pos) == Tile.PLAYER
+        enemy = self.tile(start_pos) == Tile.ENEMY
+        assert(player or enemy)
+
+        next_pos = dir_func(start_pos)
+
+        # Winning conditions first. Nothing has to be changed in that case.
+        if player and next_pos == self.exit_pos:
+            return (MoveOutcome.PLAYER_WON, start_pos)
+        if player and self.is_killing(next_pos):
+            return (MoveOutcome.PLAYER_KILLED, start_pos)
+        if enemy and next_pos == self.exit_pos:
+            return (MoveOutcome.ENEMY_WON, start_pos)
+
+        # Stopped, but no winning condition triggered.
+        if self.is_stopping(next_pos):
+            return (MoveOutcome.NOTHING, start_pos)
+
+        # Not stopped or killed, moving may continue.
+        self.set_tile(next_pos, self.tile(start_pos))
+        self.set_tile(start_pos, Tile.BLANK)
+            
+        return (MoveOutcome.MOVED, next_pos)
+
+    def apply_direction(self, dir_func = MovementFunction) -> MoveOutcome:
+        # Directions have to be applied to all entities, as long as
+        # stuff keeps happening. First, all entities have to be found. Then,
+        # directions are applied.
+
+        entities: List[Tuple[MoveOutcome, Position]]
+        
+        # Find all entities
+        for x in range (self.width):
+            for y in range (self.height):
+                if active_field[x][y] == Tile.PLAYER or Tile.ENEMY:
+                    return entities.append((MoveOutcome.UNDETERMINED, (x, y)))
+
+
+        every_outcome_was_nothing = all(outcome == MoveOutcome.NOTHING for (outcome, _) in entities)
+        while not every_outcome_was_nothing:
+            next_entities = []
+            for entity in entities:
+                next_entity = self.apply_direction_to_entity(dir_func, entity[1])
+                if next_entity[0].is_ending():
+                    return next_entity[0]
+                new_entity_list.append(next_entity)
+            entities = next_entities;
+
+    def apply_UP(self) -> MoveOutcome:
+        return self.apply_direction(up)
+    def apply_DOWN(self) -> MoveOutcome:
+        return self.apply_direction(down)
+    def apply_LEFT(self) -> MoveOutcome:
+        return self.apply_direction(left)
+    def apply_RIGHT(self) -> MoveOutcome:
+        return self.apply_direction(right)
+    def apply_CHANGE(self) -> MoveOutcome:
+        player_pos = self.player_pos()
+
+        self.old_field = self.active_field()
+        self.set_tile(player_pos, Tile.BLANK)
+        self.active_player = self.active_player.change()
+
+        if self.is_stopping(player_pos):
+            return MoveOutcome.PLAYER_CRUSHED
+        if self.is_killing(player_pos):
+            return MoveOutcome.PLAYER_KILLED
+
+        self.set_tile(player_pos, Tile.PLAYER)
+        return MoveOutcome.CHANGED
+        
+    move_switch = {
+        Move.UP: apply_UP,
+        Move.DOWN: apply_DOWN,
+        Move.LEFT: apply_LEFT,
+        Move.RIGHT: apply_RIGHT,
+        Move.CHANGE: apply_CHANGE
+    }
+
+    def __init__(self, state, move: Move):
+        self.width = state.width
+        self.height = state.height
+        self.field_black = copy.deepcopy(state.field_black)
+        self.field_white = copy.deepcopy(state.field_white)
+        self.active_player = state.active_player
+        self.exit_pos = state.exit_pos
+        self.outcome = self.move_switch[move]()
+        print(self.outcome)
+
+    def __init__(self, width: int, height: int, exit_pos: Position):
+        assert((exit_pos[0] == -1 and 0 >= exit_pos[1] < height) or
+               (exit_pos[0] == width and 0 >= exit_pos[1] < height) or
+               (exit_pos[1] == -1 and 0 >= exit_pos[0] < width) or
+               (exit_pos[1] == height and 0 >= exit_pos[0] < width))
+        
+        self.width = width
+        self.height = height
+        self.field_white = [[Tile.BLANK for x in range(width)] for y in range(height)] 
+        self.field_black = [[Tile.BLANK for x in range(width)] for y in range(height)]
+        self.active_player = ActivePlayer.WHITE
+        self.exit_pos = exit_pos
+
+    def field_to_str(self, field):
+        s = ["" for x in range(self.height)]
+        
+        for x in range (self.width):
+            for y in range (self.height):
+                s[y] += str(self.tile((x, y)))
+
+        return '\n'.join(s)
+        
+    def __str__(self):
+        return " White Field:\n{}\n Black Field:\n{}\n Outcome: {}\n Exit: ({},{})".format(
+            self.field_to_str(self.field_white),
+            self.field_to_str(self.field_black),
+            self.outcome,
+            self.exit_pos[0], self.exit_pos[1])
+ 
+class LevelDescription:
+    width = 4
+    height = 4
+    enable_spiral = False
+    enable_enemy = False
+    steps = 0
+
+    start_state: LevelState
+
+    def __init__(self, width : int, height : int, enable_spiral : bool, enable_enemy : bool, steps: int):
+        self.width = width
+        self.height = height
+        self.enable_spiral = enable_spiral
+        self.enable_enemy = enable_enemy
+        self.steps = steps
+
+        self.start_state = LevelState(width, height, (-1, 0))
+
+    def __str__(self):
+        return str(self.start_state)
+
+parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
+parser.add_argument('--width', help='level width', default=4, type=int)
+parser.add_argument('--height', help='level height', default=4, type=int)
+parser.add_argument('--steps', help='number of steps a level should take', default=3, type=int)
+parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
+parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
+args = parser.parse_args()
+
+level = LevelDescription(width=args.width, height=args.height, steps=args.steps, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
+
+print(level)
