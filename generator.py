@@ -215,14 +215,14 @@ class LevelState:
             self.active_player = ActivePlayer.WHITE
             self.exit_pos = exit_pos
         else:
-            assert(move is not None)
-            
             self.width = state.width
             self.height = state.height
             self.field_black = copy.deepcopy(state.field_black)
             self.field_white = copy.deepcopy(state.field_white)
             self.active_player = state.active_player
             self.exit_pos = state.exit_pos
+
+        if move is not None:
             self.outcome = self.move_switch[move](self)
 
     def field_to_str(self, field):
@@ -294,16 +294,37 @@ class LevelDescription:
 
         while steps > 0:
             sources = self.compute_possible_sources(self.player_pos, self.state)
+            source, stopper, move = ((0, 0), (0, 0), Move.UP)
 
-            source, stopper, move = random.choice(sources)
+            while True:
+                choice = random.choice(sources)
+                source, stopper, move = choice
 
-            if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                self.state.set_tile(stopper, Tile.BLOCK)
+                new_state = LevelState(state=self.state)
+                if new_state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                    new_state.set_tile(stopper, Tile.BLOCK)
+
+                new_state.set_tile(source, Tile.PLAYER)
+
+                moves = self.moves.copy()
+                moves.insert(0, move)
+
+                # Try if level can still be solved
+                s = new_state
+                for move in moves:
+                    s = LevelState(state=s, move=move)
+
+                if s.outcome == MoveOutcome.PLAYER_WON:
+                    self.moves = moves
+                    if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                        self.state.set_tile(stopper, Tile.BLOCK)
+                    break
+                else:
+                    sources.remove(choice)
 
             self.player_pos = source
-            self.moves.insert(0, move)
-
             steps -= 1
+        self.state.set_tile(self.player_pos, Tile.PLAYER)
 
     def __str__(self):
         return str(self.state) + "\n Moves: " + str(self.moves) + "\n Start: " + str(self.player_pos)
