@@ -156,6 +156,7 @@ class LevelState:
                     entities.append((MoveOutcome.UNDETERMINED, (x, y)))
 
 
+        moved_once = False
         every_outcome_was_nothing = False
         while not every_outcome_was_nothing:
             next_entities = []
@@ -163,11 +164,13 @@ class LevelState:
                 next_entity = self.apply_direction_to_entity(dir_func, entity[1])
                 if next_entity[0].is_ending():
                     return next_entity[0]
+                if next_entity[0] == MoveOutcome.MOVED:
+                    moved_once = True
                 next_entities.append(next_entity)
             entities = next_entities;
             every_outcome_was_nothing = all(outcome == MoveOutcome.NOTHING for (outcome, _) in entities)
 
-        return MoveOutcome.NOTHING
+        return MoveOutcome.MOVED if moved_once else MoveOutcome.NOTHING
 
     def apply_UP(self) -> MoveOutcome:
         return self.apply_direction(up)
@@ -210,8 +213,8 @@ class LevelState:
 
             self.width = width
             self.height = height
-            self.field_white = [[Tile.BLANK for x in range(width)] for y in range(height)] 
-            self.field_black = [[Tile.BLANK for x in range(width)] for y in range(height)]
+            self.field_white = [[Tile.BLANK for x in range(height)] for y in range(width)] 
+            self.field_black = [[Tile.BLANK for x in range(height)] for y in range(width)]
             self.active_player = ActivePlayer.WHITE
             self.exit_pos = exit_pos
         else:
@@ -273,56 +276,121 @@ class LevelDescription:
         up = player_pos[1] > 0 and 0 <= player_pos[0] and player_pos[0] < self.width
         down = player_pos[1] < self.height and 0 <= player_pos[0] and player_pos[0] < self.width
 
-        if left:
+        next_move = Move.CHANGE
+        if len(self.moves) > 0:
+            next_move = self.moves[0]
+
+        if left and next_move not in [Move.RIGHT, Move.LEFT]:
             for x in range (0, player_pos[0]):
+                if self.state.is_stopping((x, player_pos[1])) or self.state.is_killing((x, player_pos[1])):
+                    continue
                 sources.append(((x, player_pos[1]), (player_pos[0] + 1, player_pos[1]), Move.RIGHT))
-        if right:
+        if right and next_move not in [Move.RIGHT, Move.LEFT]:
             for x in range (player_pos[0], self.width):
+                if self.state.is_stopping((x, player_pos[1])) or self.state.is_killing((x, player_pos[1])):
+                    continue
                 sources.append(((x, player_pos[1]), (player_pos[0] - 1, player_pos[1]), Move.LEFT))
-        if up:
+        if up and next_move not in [Move.UP, Move.DOWN]:
             for y in range (0, player_pos[1]):
+                if self.state.is_stopping((player_pos[0], y)) or self.state.is_killing((player_pos[0], y)):
+                    continue
                 sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] + 1), Move.DOWN))
-        if down:
+        if down and next_move not in [Move.UP, Move.DOWN]:
             for y in range (player_pos[1], self.height):
+                if self.state.is_stopping((player_pos[0], y)) or self.state.is_killing((player_pos[0], y)):
+                    continue
                 sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] - 1), Move.UP))
 
-        return sources;
+        interestingness = []
+        for source in sources:
+            interestingness.append(self.state.tile(source[1]) != Tile.OUT_OF_BOUNDS)
+
+        return (sources, interestingness);
+
+    def add_movement(self) -> bool:
+        sources, interestingness = self.compute_possible_sources(self.player_pos, self.state)
+        source, stopper, move = ((0, 0), (0, 0), Move.UP)
+
+        while True:
+            if len(sources) == 0:
+                return False
+            
+            choice = random.choices(sources,weights=interestingness)[0]
+            source, stopper, move = choice
+            interestingness_index = sources.index(choice)
+
+            new_state = LevelState(state=self.state)
+            if new_state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                new_state.set_tile(stopper, Tile.BLOCK)
+
+            new_state.set_tile(source, Tile.PLAYER)
+
+            moves = self.moves.copy()
+            moves.insert(0, move)
+
+            # Try if level can still be solved
+            s = new_state
+            for move in moves:
+                s = LevelState(state=s, move=move)
+                if s.outcome == MoveOutcome.NOTHING:
+                    break
+
+            if s.outcome == MoveOutcome.PLAYER_WON:
+                self.moves = moves
+                if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                    self.state.set_tile(stopper, Tile.BLOCK)
+                break
+            else:
+                sources.remove(choice)
+                interestingness.pop(interestingness_index)
+
+        self.player_pos = source
+        return True
+
+    def add_enemy(self) -> bool:
+        choices = []
+
+        active_field = self.state.active_field()
+        for x in range (self.width):
+            for y in range (self.height):
+                if active_field[x][y] == Tile.BLANK and x != self.player_pos[0] and y != self.player_pos[1]:
+                    choices.append((x, y))
+
+        while True:
+            if len(choices) == 0:
+                return False
+            
+            choice = random.choice(choices)
+
+            new_state = LevelState(state=self.state)
+
+            new_state.set_tile(stopper, Tile.ENEMY)
+            new_state.set_tile(source, Tile.PLAYER)
+
+            moves = self.moves.copy()
+            moves.insert(0, move)
+
+            # Try if level can still be solved
+            s = new_state
+            for move in moves:
+                s = LevelState(state=s, move=move)
+
+            if s.outcome == MoveOutcome.PLAYER_WON:
+                self.moves = moves
+                if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                    self.state.set_tile(stopper, Tile.BLOCK)
+                break
+            else:
+                sources.remove(choice)
 
     def generate_with_player_from_exit_pos(self, steps: int):
         self.player_pos = self.exit_pos
         self.moves = []
 
         while steps > 0:
-            sources = self.compute_possible_sources(self.player_pos, self.state)
-            source, stopper, move = ((0, 0), (0, 0), Move.UP)
 
-            while True:
-                choice = random.choice(sources)
-                source, stopper, move = choice
+            self.add_movement()
 
-                new_state = LevelState(state=self.state)
-                if new_state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                    new_state.set_tile(stopper, Tile.BLOCK)
-
-                new_state.set_tile(source, Tile.PLAYER)
-
-                moves = self.moves.copy()
-                moves.insert(0, move)
-
-                # Try if level can still be solved
-                s = new_state
-                for move in moves:
-                    s = LevelState(state=s, move=move)
-
-                if s.outcome == MoveOutcome.PLAYER_WON:
-                    self.moves = moves
-                    if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                        self.state.set_tile(stopper, Tile.BLOCK)
-                    break
-                else:
-                    sources.remove(choice)
-
-            self.player_pos = source
             steps -= 1
         self.state.set_tile(self.player_pos, Tile.PLAYER)
 
@@ -333,7 +401,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
     parser.add_argument('--width', help='level width', default=4, type=int)
     parser.add_argument('--height', help='level height', default=4, type=int)
-    parser.add_argument('--steps', help='number of steps a level should take', default=3, type=int)
+    parser.add_argument('--steps', help='number of steps a level should take', default=5, type=int)
     parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
     parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
     args = parser.parse_args()
