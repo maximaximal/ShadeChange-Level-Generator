@@ -251,11 +251,27 @@ class LevelState:
         return '\n'.join(s)
         
     def __str__(self):
-        return " White Field:\n{}\n Black Field:\n{}\n Outcome: {}\n Exit: ({},{})".format(
+        return " White Field (1):\n{}\n Black Field (0):\n{}\n Outcome: {}\n Exit: ({},{})".format(
             self.field_to_str(self.field_white),
             self.field_to_str(self.field_black),
             self.outcome,
             self.exit_pos[0], self.exit_pos[1])
+
+    def to_list(self):
+        s = ""
+        for x in range (self.width):
+            for y in range (self.height):
+                s += str(x) + "," + str(y) + "," + str(self.field_white[x][y].value) + '\n'
+        s += "\n"
+        for x in range (self.width):
+            for y in range (self.height):
+                s += str(x) + "," + str(y) + "," + str(self.field_white[x][y].value) + '\n'
+        s += "\n"
+        p = self.player_pos()
+        s += str(p[0]) + "," + str(p[1]) + "," + ("1" if self.active_player == ActivePlayer.WHITE else "0")
+        s += "\n\n"
+        s += str(self.exit_pos[0]) + "," + str(self.exit_pos[1])
+        return s
  
 class LevelDescription:
     width = 4
@@ -386,6 +402,8 @@ class LevelDescription:
             s = new_state
             for move in self.moves:
                 s = LevelState(state=s, move=move)
+                if s.outcome in [MoveOutcome.PLAYER_CRUSHED, MoveOutcome.PLAYER_KILLED, MoveOutcome.ENEMY_WON]:
+                    break
 
             if s.outcome == MoveOutcome.PLAYER_WON:
                 self.state.set_tile(choice, Tile.ENEMY)
@@ -419,6 +437,8 @@ class LevelDescription:
             s = new_state
             for move in self.moves:
                 s = LevelState(state=s, move=move)
+                if s.outcome in [MoveOutcome.PLAYER_CRUSHED, MoveOutcome.PLAYER_KILLED, MoveOutcome.ENEMY_WON]:
+                    break
 
             if s.outcome == MoveOutcome.PLAYER_WON:
                 self.state.set_tile(choice, Tile.SPIRAL)
@@ -470,9 +490,16 @@ if __name__ == "__main__":
     parser.add_argument('--steps', help='number of steps a level should take', default=5, type=int)
     parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
     parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
+    parser.add_argument('--print-list', help='print output to list. First section is white board, second is black.', default=False, action="store_true")
+    parser.add_argument('--print-human-readable', help='print human readable output', default=True, action="store_true")
     args = parser.parse_args()
 
     level = LevelDescription(width=args.width, height=args.height, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
     level.generate_with_player_from_exit_pos(args.steps)
 
-    print(level)
+    if args.print_human_readable:
+        print(level)
+        print("\n")
+    if args.print_list:
+        print(level.state.to_list())
+
