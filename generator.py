@@ -56,13 +56,13 @@ class MoveOutcome(Enum):
     PLAYER_KILLED = 8
 
     def is_ending(self):
-        return self == PLAYER_WON or PLAYER_KILLED or PLAYER_CRUSHED or ENEMY_WON
+        return self in [self.PLAYER_WON, self.PLAYER_KILLED, self.PLAYER_CRUSHED, self.ENEMY_WON]
 
 class ActivePlayer(Enum):
     WHITE = 1
     BLACK = 2
     def change(self):
-        return WHITE if self == BLACK else BLACK
+        return self.WHITE if self == self.BLACK else self.BLACK
 
 class LevelState:
     field_white = None
@@ -74,10 +74,15 @@ class LevelState:
     width : int
     height : int
 
-    def active_field(self):
-        if self.active_player == WHITE:
+    def active_field(self, flipped=False):
+        active_player = self.active_player
+
+        if flipped:
+            active_player = active_player.change()
+
+        if active_player == ActivePlayer.WHITE:
             return self.field_white
-        if self.active_player == BLACK:
+        if active_player == ActivePlayer.BLACK:
             return self.field_black
 
     def player_pos(self):
@@ -95,26 +100,20 @@ class LevelState:
         active_field = self.active_field()
         return active_field[pos[0]][pos[1]]
 
-    def set_tile(self, pos: Position, tile: Tile):
+    def set_tile(self, pos: Position, tile: Tile, flipped=False):
         assert(pos[0] >= 0 and pos[0] < self.width and pos[1] >= 0 or pos[1] < self.height)
-        active_field = self.active_field()
+        active_field = self.active_field(flipped)
         active_field[pos[0]][pos[1]] = tile
 
     def is_stopping(self, pos: Position):
         active_field = self.active_field()
         tile = self.tile(pos)
-        return tile == Tile.INVALID or Tile.BLOCK
+        return tile in [Tile.OUT_OF_BOUNDS, Tile.BLOCK]
 
     def is_killing(self, pos: Position):
         active_field = self.active_field()
         tile = self.tile(pos)
-        return tile == Tile.ENEMY or Tile.SPIRAL
-
-    def active_field(self):
-        if self.active_player == ActivePlayer.WHITE:
-            return self.field_white
-        if self.active_player == ActivePlayer.BLACK:
-            return self.field_black
+        return tile in [Tile.ENEMY, Tile.SPIRAL]
 
     def apply_direction_to_entity(self, dir_func = MovementFunction, start_pos = Position) -> Tuple[MoveOutcome, Position]:
         player = self.tile(start_pos) == Tile.PLAYER
@@ -146,24 +145,28 @@ class LevelState:
         # stuff keeps happening. First, all entities have to be found. Then,
         # directions are applied.
 
-        entities: List[Tuple[MoveOutcome, Position]]
+        entities: List[Tuple[MoveOutcome, Position]] = []
+        active_field = self.active_field()
         
         # Find all entities
         for x in range (self.width):
             for y in range (self.height):
-                if active_field[x][y] == Tile.PLAYER or Tile.ENEMY:
-                    return entities.append((MoveOutcome.UNDETERMINED, (x, y)))
+                if active_field[x][y] in [Tile.PLAYER, Tile.ENEMY]:
+                    entities.append((MoveOutcome.UNDETERMINED, (x, y)))
 
 
-        every_outcome_was_nothing = all(outcome == MoveOutcome.NOTHING for (outcome, _) in entities)
+        every_outcome_was_nothing = False
         while not every_outcome_was_nothing:
             next_entities = []
             for entity in entities:
                 next_entity = self.apply_direction_to_entity(dir_func, entity[1])
                 if next_entity[0].is_ending():
                     return next_entity[0]
-                new_entity_list.append(next_entity)
+                next_entities.append(next_entity)
             entities = next_entities;
+            every_outcome_was_nothing = all(outcome == MoveOutcome.NOTHING for (outcome, _) in entities)
+
+        return MoveOutcome.NOTHING
 
     def apply_UP(self) -> MoveOutcome:
         return self.apply_direction(up)
@@ -196,28 +199,30 @@ class LevelState:
         Move.CHANGE: apply_CHANGE
     }
 
-    def __init__(self, state, move: Move):
-        self.width = state.width
-        self.height = state.height
-        self.field_black = copy.deepcopy(state.field_black)
-        self.field_white = copy.deepcopy(state.field_white)
-        self.active_player = state.active_player
-        self.exit_pos = state.exit_pos
-        self.outcome = self.move_switch[move]()
-        print(self.outcome)
+    def __init__(self, state = None, move: Move = None, width: int = None, height: int = None, exit_pos: Position = None):
+        if state == None:
+            assert(width is not None and  height is not None and exit_pos is not None)
+            assert((exit_pos[0] == -1 and 0 >= exit_pos[1] < height) or
+                (exit_pos[0] == width and 0 >= exit_pos[1] < height) or
+                (exit_pos[1] == -1 and 0 >= exit_pos[0] < width) or
+                (exit_pos[1] == height and 0 >= exit_pos[0] < width))
 
-    def __init__(self, width: int, height: int, exit_pos: Position):
-        assert((exit_pos[0] == -1 and 0 >= exit_pos[1] < height) or
-               (exit_pos[0] == width and 0 >= exit_pos[1] < height) or
-               (exit_pos[1] == -1 and 0 >= exit_pos[0] < width) or
-               (exit_pos[1] == height and 0 >= exit_pos[0] < width))
-        
-        self.width = width
-        self.height = height
-        self.field_white = [[Tile.BLANK for x in range(width)] for y in range(height)] 
-        self.field_black = [[Tile.BLANK for x in range(width)] for y in range(height)]
-        self.active_player = ActivePlayer.WHITE
-        self.exit_pos = exit_pos
+            self.width = width
+            self.height = height
+            self.field_white = [[Tile.BLANK for x in range(width)] for y in range(height)] 
+            self.field_black = [[Tile.BLANK for x in range(width)] for y in range(height)]
+            self.active_player = ActivePlayer.WHITE
+            self.exit_pos = exit_pos
+        else:
+            assert(move is not None)
+            
+            self.width = state.width
+            self.height = state.height
+            self.field_black = copy.deepcopy(state.field_black)
+            self.field_white = copy.deepcopy(state.field_white)
+            self.active_player = state.active_player
+            self.exit_pos = state.exit_pos
+            self.outcome = self.move_switch[move](self)
 
     def field_to_str(self, field):
         s = ["" for x in range(self.height)]
@@ -244,7 +249,7 @@ class LevelDescription:
 
     start_state: LevelState
 
-    def __init__(self, width : int, height : int, enable_spiral : bool, enable_enemy : bool, steps: int):
+    def __init__(self, width : int = 4, height : int = 4, enable_spiral : bool = False, enable_enemy : bool = False, steps: int = 2):
         self.width = width
         self.height = height
         self.enable_spiral = enable_spiral
@@ -256,14 +261,15 @@ class LevelDescription:
     def __str__(self):
         return str(self.start_state)
 
-parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
-parser.add_argument('--width', help='level width', default=4, type=int)
-parser.add_argument('--height', help='level height', default=4, type=int)
-parser.add_argument('--steps', help='number of steps a level should take', default=3, type=int)
-parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
-parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
-args = parser.parse_args()
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
+    parser.add_argument('--width', help='level width', default=4, type=int)
+    parser.add_argument('--height', help='level height', default=4, type=int)
+    parser.add_argument('--steps', help='number of steps a level should take', default=3, type=int)
+    parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
+    parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
+    args = parser.parse_args()
 
-level = LevelDescription(width=args.width, height=args.height, steps=args.steps, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
+    level = LevelDescription(width=args.width, height=args.height, steps=args.steps, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
 
-print(level)
+    print(level)
