@@ -20,7 +20,7 @@ class TestLevelState(unittest.TestCase):
         state.set_tile((0, 0), generator.Tile.PLAYER)
         state.set_tile((2, 0), generator.Tile.BLOCK)
         new_state = generator.LevelState(state=state, move=generator.Move.RIGHT)
-        self.assertEqual(new_state.outcome, generator.MoveOutcome.NOTHING)
+        self.assertEqual(new_state.outcome, generator.MoveOutcome.MOVED)
 
         new_state = generator.LevelState(state=new_state, move=generator.Move.RIGHT)
         self.assertEqual(new_state.outcome, generator.MoveOutcome.NOTHING)
@@ -32,7 +32,7 @@ class TestLevelState(unittest.TestCase):
         state.set_tile((3, 0), generator.Tile.BLOCK)
         state.set_tile((2, 0), generator.Tile.BLOCK, flipped=True)
         new_state = generator.LevelState(state=state, move=generator.Move.RIGHT)
-        self.assertEqual(new_state.outcome, generator.MoveOutcome.NOTHING)
+        self.assertEqual(new_state.outcome, generator.MoveOutcome.MOVED)
 
         new_state = generator.LevelState(state=new_state, move=generator.Move.CHANGE)
         self.assertEqual(new_state.outcome, generator.MoveOutcome.PLAYER_CRUSHED)

@@ -45,6 +45,14 @@ class Move(Enum):
     LEFT = 3
     RIGHT = 4
     CHANGE = 5
+    def __str__(self):
+        return {
+            self.UP: "↑",
+            self.DOWN: "↓",
+            self.LEFT: "←",
+            self.RIGHT: "→",
+            self.CHANGE: "⇄"
+            }[self]
 
 class MoveOutcome(Enum):
     UNDETERMINED = 1
@@ -128,6 +136,8 @@ class LevelState:
             return (MoveOutcome.PLAYER_WON, start_pos)
         if player and self.is_killing(next_pos):
             return (MoveOutcome.PLAYER_KILLED, start_pos)
+        if enemy and self.tile(next_pos) == Tile.PLAYER:
+            return (MoveOutcome.PLAYER_KILLED, start_pos)
         if enemy and next_pos == self.exit_pos:
             return (MoveOutcome.ENEMY_WON, start_pos)
 
@@ -182,8 +192,8 @@ class LevelState:
         return self.apply_direction(right)
     def apply_CHANGE(self) -> MoveOutcome:
         player_pos = self.player_pos()
+        assert(player_pos is not None)
 
-        self.old_field = self.active_field()
         self.set_tile(player_pos, Tile.BLANK)
         self.active_player = self.active_player.change()
 
@@ -193,6 +203,9 @@ class LevelState:
             return MoveOutcome.PLAYER_KILLED
 
         self.set_tile(player_pos, Tile.PLAYER)
+
+        assert(self.tile(player_pos) == Tile.PLAYER)
+        
         return MoveOutcome.CHANGED
         
     move_switch = {
@@ -364,38 +377,91 @@ class LevelDescription:
 
             new_state = LevelState(state=self.state)
 
-            new_state.set_tile(stopper, Tile.ENEMY)
-            new_state.set_tile(source, Tile.PLAYER)
-
-            moves = self.moves.copy()
-            moves.insert(0, move)
+            assert(new_state.tile(choice) == Tile.BLANK)
+            
+            new_state.set_tile(choice, Tile.ENEMY)
+            new_state.set_tile(self.player_pos, Tile.PLAYER)
 
             # Try if level can still be solved
             s = new_state
-            for move in moves:
+            for move in self.moves:
                 s = LevelState(state=s, move=move)
 
             if s.outcome == MoveOutcome.PLAYER_WON:
-                self.moves = moves
-                if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                    self.state.set_tile(stopper, Tile.BLOCK)
+                self.state.set_tile(choice, Tile.ENEMY)
                 break
             else:
-                sources.remove(choice)
+                choices.remove(choice)
+
+    def add_spiral(self) -> bool:
+        choices = []
+
+        active_field = self.state.active_field()
+        for x in range (self.width):
+            for y in range (self.height):
+                if active_field[x][y] == Tile.BLANK and x != self.player_pos[0] and y != self.player_pos[1]:
+                    choices.append((x, y))
+
+        while True:
+            if len(choices) == 0:
+                return False
+            
+            choice = random.choice(choices)
+
+            new_state = LevelState(state=self.state)
+
+            assert(new_state.tile(choice) == Tile.BLANK)
+            
+            new_state.set_tile(choice, Tile.SPIRAL)
+            new_state.set_tile(self.player_pos, Tile.PLAYER)
+
+            # Try if level can still be solved
+            s = new_state
+            for move in self.moves:
+                s = LevelState(state=s, move=move)
+
+            if s.outcome == MoveOutcome.PLAYER_WON:
+                self.state.set_tile(choice, Tile.SPIRAL)
+                break
+            else:
+                choices.remove(choice)
+
+    def add_change(self):
+        s = LevelState(state=self.state)
+        s.set_tile(self.player_pos, Tile.PLAYER)
+        s = LevelState(state=s, move=Move.CHANGE)
+        if s.outcome == MoveOutcome.CHANGED:
+            self.moves.insert(0, Move.CHANGE)
+            self.state.active_player = self.state.active_player.change()
+            return True
+        else:
+            return False
 
     def generate_with_player_from_exit_pos(self, steps: int):
         self.player_pos = self.exit_pos
         self.moves = []
 
         while steps > 0:
+            r = random.random()
 
-            self.add_movement()
+            if r > 0.9 and len(self.moves) > 0 and self.moves[0] != Move.CHANGE:
+                self.add_change()
+            else:
+                self.add_movement()
 
             steps -= 1
+
+        if self.enable_enemy: self.add_enemy()
+        if self.enable_spiral: self.add_spiral()
+        self.state.active_player = self.state.active_player.change()
+        if self.enable_enemy: self.add_enemy()
+        if self.enable_spiral: self.add_spiral()
+        self.state.active_player = self.state.active_player.change()
+        
         self.state.set_tile(self.player_pos, Tile.PLAYER)
 
     def __str__(self):
-        return str(self.state) + "\n Moves: " + str(self.moves) + "\n Start: " + str(self.player_pos)
+        return str(self.state) + "\n Moves: " + ", ".join(map(str, self.moves)) + "\n Start: " + str(self.player_pos)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
