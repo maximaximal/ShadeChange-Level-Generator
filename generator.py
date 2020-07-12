@@ -2,6 +2,7 @@
 import argparse
 from enum import Enum
 import copy
+import random
 from typing import List, Tuple, Callable
 
 Position = Tuple[int, int]
@@ -202,10 +203,10 @@ class LevelState:
     def __init__(self, state = None, move: Move = None, width: int = None, height: int = None, exit_pos: Position = None):
         if state == None:
             assert(width is not None and  height is not None and exit_pos is not None)
-            assert((exit_pos[0] == -1 and 0 >= exit_pos[1] < height) or
-                (exit_pos[0] == width and 0 >= exit_pos[1] < height) or
-                (exit_pos[1] == -1 and 0 >= exit_pos[0] < width) or
-                (exit_pos[1] == height and 0 >= exit_pos[0] < width))
+            assert((exit_pos[0] == -1 and 0 <= exit_pos[1] < height) or
+                (exit_pos[0] == width and 0 <= exit_pos[1] < height) or
+                (exit_pos[1] == -1 and 0 <= exit_pos[0] < width) or
+                (exit_pos[1] == height and 0 <= exit_pos[0] < width))
 
             self.width = width
             self.height = height
@@ -229,7 +230,7 @@ class LevelState:
         
         for x in range (self.width):
             for y in range (self.height):
-                s[y] += str(self.tile((x, y)))
+                s[y] += str(field[x][y])
 
         return '\n'.join(s)
         
@@ -245,21 +246,67 @@ class LevelDescription:
     height = 4
     enable_spiral = False
     enable_enemy = False
-    steps = 0
 
     start_state: LevelState
 
-    def __init__(self, width : int = 4, height : int = 4, enable_spiral : bool = False, enable_enemy : bool = False, steps: int = 2):
+    def __init__(self, width : int = 4, height : int = 4, enable_spiral : bool = False, enable_enemy : bool = False):
         self.width = width
         self.height = height
         self.enable_spiral = enable_spiral
         self.enable_enemy = enable_enemy
-        self.steps = steps
 
-        self.start_state = LevelState(width, height, (-1, 0))
+        end_pos_x = random.randrange(-1, width + 1)
+        end_pos_y = 0
+        if end_pos_x == -1 or end_pos_x == width:
+            end_pos_y = random.randrange(height)
+        else:
+            end_pos_y = random.choice([-1, height])
+        self.exit_pos=(end_pos_x, end_pos_y)
+
+        self.state = LevelState(width=width, height=height, exit_pos=self.exit_pos)
+
+    def compute_possible_sources(self, player_pos, state):
+        sources = []
+        
+        left = player_pos[0] > 0 and 0 <= player_pos[1] and player_pos[1] < self.height
+        right = player_pos[0] < self.width and 0 <= player_pos[1] and player_pos[1] < self.height
+        up = player_pos[1] > 0 and 0 <= player_pos[0] and player_pos[0] < self.width
+        down = player_pos[1] < self.height and 0 <= player_pos[0] and player_pos[0] < self.width
+
+        if left:
+            for x in range (0, player_pos[0]):
+                sources.append(((x, player_pos[1]), (player_pos[0] + 1, player_pos[1]), Move.RIGHT))
+        if right:
+            for x in range (player_pos[0], self.width):
+                sources.append(((x, player_pos[1]), (player_pos[0] - 1, player_pos[1]), Move.LEFT))
+        if up:
+            for y in range (0, player_pos[1]):
+                sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] + 1), Move.DOWN))
+        if down:
+            for y in range (player_pos[1], self.height):
+                sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] - 1), Move.UP))
+
+        return sources;
+
+    def generate_with_player_from_exit_pos(self, steps: int):
+        self.player_pos = self.exit_pos
+        self.moves = []
+
+        while steps > 0:
+            sources = self.compute_possible_sources(self.player_pos, self.state)
+
+            source, stopper, move = random.choice(sources)
+
+            if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                self.state.set_tile(stopper, Tile.BLOCK)
+
+            self.player_pos = source
+            self.moves.insert(0, move)
+
+            steps -= 1
 
     def __str__(self):
-        return str(self.start_state)
+        return str(self.state) + "\n Moves: " + str(self.moves) + "\n Start: " + str(self.player_pos)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Generate levels for ShadeChange.')
@@ -270,6 +317,7 @@ if __name__ == "__main__":
     parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
     args = parser.parse_args()
 
-    level = LevelDescription(width=args.width, height=args.height, steps=args.steps, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
+    level = LevelDescription(width=args.width, height=args.height, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
+    level.generate_with_player_from_exit_pos(args.steps)
 
     print(level)
