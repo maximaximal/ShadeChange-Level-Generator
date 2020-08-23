@@ -571,13 +571,11 @@ class LevelSearcher:
         # Check if moves lead to winning.
         s = state
         winning = False
-        outcome = MoveOutcome.NOTHING
         for m in moves:
             s = LevelState(state=s, move=m)
             outcome = s.outcome
- 
-        if outcome != MoveOutcome.PLAYER_WON:
-            return False
+            if outcome.is_ending() and outcome != MoveOutcome.PLAYER_WON:
+                return False
 
         # Check if there is any shorter way
         bot = BotPlayer(copy.deepcopy(state), state.player_pos(), len(moves))
