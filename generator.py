@@ -94,12 +94,18 @@ class LevelState:
         if active_player == ActivePlayer.BLACK:
             return self.field_black
 
-    def player_pos(self):
+    def player_pos(self) -> Position:
         active_field = self.active_field()
+        pos = [-1, -1]
         for x in range (self.width):
             for y in range (self.height):
                 if active_field[x][y] == Tile.PLAYER:
-                    return (x, y)
+                    assert(pos[0] == -1 and pos[1] == -1)
+                    pos[0] = x
+                    pos[1] = y
+
+        assert(pos[0] != -1 and pos[1] != -1)
+        return pos
 
     def tile(self, pos: Position):
         if pos[0] < 0 or pos[0] >= self.width:
@@ -107,6 +113,14 @@ class LevelState:
         if pos[1] < 0 or pos[1] >= self.height:
             return Tile.OUT_OF_BOUNDS
         active_field = self.active_field()
+        return active_field[pos[0]][pos[1]]
+
+    def changed_tile(self, pos: Position):
+        if pos[0] < 0 or pos[0] >= self.width:
+            return Tile.OUT_OF_BOUNDS
+        if pos[1] < 0 or pos[1] >= self.height:
+            return Tile.OUT_OF_BOUNDS
+        active_field = self.active_field(flipped=True)
         return active_field[pos[0]][pos[1]]
 
     def set_tile(self, pos: Position, tile: Tile, flipped=False):
@@ -330,37 +344,155 @@ class BotPlayer:
             if searcher.do_search() is not None:
                 return searcher.path
 
-        # Searcher should ALWAYS find a solution!
-        assert(False)
         return False
 
- 
-class LevelDescription:
-    width = 4
-    height = 4
-    enable_spiral = False
-    enable_enemy = False
+class LevelSearcherConfig:
+    width: int = 4 # Constant
+    height: int = 4 # Constant
+    move_count: int = 5 # Constant
+    spirals: int = 0 # Shrinking
+    enemies: int = 0 # Shrinking
+    moves: int = 0 # Growing
+    changes: int = 1 # Shrinking
+    blocks: int = 1 # Shrinking
 
-    start_state: LevelState
+class GeneratorAction:
+    move: Move = None
 
-    def __init__(self, width : int = 4, height : int = 4, enable_spiral : bool = False, enable_enemy : bool = False):
-        self.width = width
-        self.height = height
-        self.enable_spiral = enable_spiral
-        self.enable_enemy = enable_enemy
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        pass
 
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        pass
+
+    def get_moves(actions):
+        moves = []
+        for action in actions:
+            if action.move is not None:
+                moves.append(action.move)
+        return moves
+
+    def __str__(self):
+        return "GeneratorAction"
+
+class GeneratorMovementAction(GeneratorAction):
+    def __init__(self, player_pos: Position, source: Position, stopper: Position, move: Move):
+        self.source = source
+        self.stopper = stopper
+        self.move = move
+        self.orig_stopper_tile = None
+        self.player_pos = player_pos
+
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        assert(state.tile(self.source) == Tile.BLANK)
+        
+        tile = state.tile(self.stopper)
+        if tile != Tile.OUT_OF_BOUNDS:
+            self.orig_stopper_tile = tile
+            state.set_tile(self.stopper, Tile.BLOCK)
+
+        if(state.tile(self.player_pos) != Tile.OUT_OF_BOUNDS):
+            state.set_tile(self.player_pos, Tile.BLANK)
+
+        state.set_tile(self.source, Tile.PLAYER)
+
+        config.moves += 1
+        
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        if self.orig_stopper_tile is not None:
+            state.set_tile(self.stopper, self.orig_stopper_tile)
+
+        state.set_tile(self.source, Tile.BLANK)
+
+        if(state.tile(self.player_pos) != Tile.OUT_OF_BOUNDS):
+            state.set_tile(self.player_pos, Tile.PLAYER)
+
+        config.moves -= 1
+
+    def __str__(self):
+        return "(" + str(self.move) + ", source=" + str(self.source) + ", stopper=" + str(self.stopper) + ")"
+
+class GeneratorChangeAction:
+    def __init__(self):
+        self.move = Move.CHANGE
+
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        player_pos = state.player_pos()
+        state.set_tile(player_pos, Tile.BLANK)
+        state.active_player = state.active_player.change()
+        state.set_tile(player_pos, Tile.PLAYER)
+        config.changes -= 1
+
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        player_pos = state.player_pos()
+        state.set_tile(player_pos, Tile.BLANK)
+        state.active_player = state.active_player.change()
+        state.set_tile(player_pos, Tile.PLAYER)
+        config.changes += 1
+
+class GeneratorBlockAction:
+    def __init__(self, pos: Position):
+        self.pos = pos
+        self.move = None
+
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        state.set_tile(self.pos, Tile.BLOCK)
+        config.blocks -= 1
+
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        state.set_tile(self.pos, Tile.BLANK)
+        config.blocks += 1
+
+class GeneratorEnemyAction:
+    def __init__(self, pos: Position):
+        self.pos = pos
+        self.move = None
+
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        assert(config.enemies > 0)
+        state.set_tile(self.pos, Tile.ENEMY)
+        config.enemies -= 1
+
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        state.set_tile(self.pos, Tile.BLANK)
+        config.enemies += 1
+
+class GeneratorSpiralAction:
+    def __init__(self, pos: Position):
+        self.pos = pos
+        self.move = None
+
+    def do(self, state: LevelState, config: LevelSearcherConfig):
+        assert(config.spirals > 0)
+        state.set_tile(self.pos, Tile.SPIRAL)
+        config.spirals -= 1
+
+    def undo(self, state: LevelState, config: LevelSearcherConfig):
+        state.set_tile(self.pos, Tile.BLANK)
+        config.spirals += 1
+
+class LevelSearcher:
+    def get_random_exit_pos(width: int, height: int) -> Position:
         end_pos_x = random.randrange(-1, width + 1)
         end_pos_y = 0
         if end_pos_x == -1 or end_pos_x == width:
             end_pos_y = random.randrange(height)
         else:
             end_pos_y = random.choice([-1, height])
-        self.exit_pos=(end_pos_x, end_pos_y)
+        return (end_pos_x, end_pos_y)
+    
+    def __init__(self, config: LevelSearcherConfig):
+        self.width = config.width
+        self.height = config.height
+        self.config = config
+        self.max_depth = 1
+        self.player_pos = [0, 0]
 
-        self.state = LevelState(width=width, height=height, exit_pos=self.exit_pos)
+        exit_pos = LevelSearcher.get_random_exit_pos(self.width, self.height)
+        self.level = LevelState(width=self.width, height=self.height, exit_pos=exit_pos)
 
-    def compute_possible_sources(self, player_pos, state, block: Set[Tuple[Move, Position]]):
-        sources = []
+    def expand_moves(self, state: LevelState, player_pos: Position):
+        actions = []
         
         left = player_pos[0] > 0 and 0 <= player_pos[1] and player_pos[1] < self.height
         right = player_pos[0] < self.width and 0 <= player_pos[1] and player_pos[1] < self.height
@@ -369,215 +501,164 @@ class LevelDescription:
 
         if left:
             for x in range (0, player_pos[0]):
-                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])) or (Move.RIGHT, (x, player_pos[1])) in block:
+                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])):
                     continue
-                sources.append(((x, player_pos[1]), (player_pos[0] + 1, player_pos[1]), Move.RIGHT))
+                actions.append(GeneratorMovementAction(player_pos, (x, player_pos[1]), (player_pos[0] + 1, player_pos[1]), Move.RIGHT))
         if right:
-            for x in range (player_pos[0], self.width):
-                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])) or (Move.LEFT, (x, player_pos[1])) in block:
+            for x in range (player_pos[0] + 1, self.width):
+                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])):
                     continue
-                sources.append(((x, player_pos[1]), (player_pos[0] - 1, player_pos[1]), Move.LEFT))
+                actions.append(GeneratorMovementAction(player_pos, (x, player_pos[1]), (player_pos[0] - 1, player_pos[1]), Move.LEFT))
         if up:
             for y in range (0, player_pos[1]):
-                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)) or (Move.DOWN, (player_pos[0], y)) in block:
+                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)):
                     continue
-                sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] + 1), Move.DOWN))
+                actions.append(GeneratorMovementAction(player_pos, (player_pos[0], y), (player_pos[0], player_pos[1] + 1), Move.DOWN))
         if down:
-            for y in range (player_pos[1], self.height):
-                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)) or (Move.UP, (player_pos[0], y)) in block:
+            for y in range (player_pos[1] + 1, self.height):
+                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)):
                     continue
-                sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] - 1), Move.UP))
+                actions.append(GeneratorMovementAction(player_pos, (player_pos[0], y), (player_pos[0], player_pos[1] - 1), Move.UP))
 
-        interestingness = []
-        for source in sources:
-            interestingness.append(state.tile(source[1]) != Tile.OUT_OF_BOUNDS)
+        return actions
 
-        return (sources, interestingness);
+    def expand(self, state: LevelState, running_config: LevelSearcherConfig):
+        actions = []
+        
+        # Spiral & Enemy
+        if running_config.enemies > 0 or running_config.spirals > 0 or running_config.blocks > 0:
+            for x in range(self.width):
+                for y in range(self.height):
+                    pos = (x, y)
+                    if not state.is_killing(pos) and not state.is_stopping(pos) and state.tile(pos) != Tile.PLAYER:
+                        if running_config.spirals > 0:
+                            actions.append(GeneratorSpiralAction(pos))
+                        if running_config.enemies > 0:
+                            actions.append(GeneratorEnemyAction(pos))
+                        if running_config.blocks:
+                            actions.append(GeneratorBlockAction(pos))
 
-    def add_movement(self, state: LevelState, moves: List[Move], player_pos: Position, block: Set[Tuple[Move, Position]]) -> Tuple[bool, Position, Tuple[Move, Position]]:
-        sources, interestingness = self.compute_possible_sources(player_pos, state, block)
-        source, stopper, move = ((0, 0), (0, 0), Move.UP)
-
-        while True:
-            if len(sources) == 0:
-                return (False, None, None)
-
-            choice = random.choices(sources,weights=interestingness)[0]
-            source = choice[0]
-            stopper = choice[1]
-            move = choice[2]
-            interestingness_index = sources.index(choice)
-
-            new_state = LevelState(state=state)
-            if new_state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                new_state.set_tile(stopper, Tile.BLOCK)
-
-            new_state.set_tile(source, Tile.PLAYER)
-
-            moves.insert(0, move)
-
-            # Try if level can still be solved
-            s = new_state
-            for m in moves:
-                s = LevelState(state=s, move=m)
-                if s.outcome == MoveOutcome.NOTHING:
-                    break
-
-            if s.outcome == MoveOutcome.PLAYER_WON:
-                if state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                    state.set_tile(stopper, Tile.BLOCK)
-                break
-            else:
-                moves.pop(0)
-                sources.remove(choice)
-                interestingness.pop(interestingness_index)
-
-        return (True, source, (move, source))
-
-    def add_enemy(self) -> bool:
-        choices = []
-
-        active_field = self.state.active_field()
-        for x in range (self.width):
-            for y in range (self.height):
-                if active_field[x][y] == Tile.BLANK and x != self.player_pos[0] and y != self.player_pos[1]:
-                    choices.append((x, y))
-
-        while True:
-            if len(choices) == 0:
-                return False
-            
-            choice = random.choice(choices)
-
-            new_state = LevelState(state=self.state)
-
-            assert(new_state.tile(choice) == Tile.BLANK)
-            
-            new_state.set_tile(choice, Tile.ENEMY)
-            new_state.set_tile(self.player_pos, Tile.PLAYER)
-
-            # Try if level can still be solved
-            s = new_state
-            for move in self.moves:
-                s = LevelState(state=s, move=move)
-                if s.outcome in [MoveOutcome.PLAYER_CRUSHED, MoveOutcome.PLAYER_KILLED, MoveOutcome.ENEMY_WON]:
-                    break
-
-            if s.outcome == MoveOutcome.PLAYER_WON:
-                self.state.set_tile(choice, Tile.ENEMY)
-                break
-            else:
-                choices.remove(choice)
-
-    def add_spiral(self) -> bool:
-        choices = []
-
-        active_field = self.state.active_field()
-        for x in range (self.width):
-            for y in range (self.height):
-                if active_field[x][y] == Tile.BLANK and x != self.player_pos[0] and y != self.player_pos[1]:
-                    choices.append((x, y))
-
-        while True:
-            if len(choices) == 0:
-                return False
-            
-            choice = random.choice(choices)
-
-            new_state = LevelState(state=self.state)
-
-            assert(new_state.tile(choice) == Tile.BLANK)
-            
-            new_state.set_tile(choice, Tile.SPIRAL)
-            new_state.set_tile(self.player_pos, Tile.PLAYER)
-
-            # Try if level can still be solved
-            s = new_state
-            for move in self.moves:
-                s = LevelState(state=s, move=move)
-                if s.outcome in [MoveOutcome.PLAYER_CRUSHED, MoveOutcome.PLAYER_KILLED, MoveOutcome.ENEMY_WON]:
-                    break
-
-            if s.outcome == MoveOutcome.PLAYER_WON:
-                self.state.set_tile(choice, Tile.SPIRAL)
-                break
-            else:
-                choices.remove(choice)
-
-    def add_change(self, state: LevelState, moves: List[Move], player_pos: Position):
-        assert(state is not None)
-        assert(player_pos is not None)
-
-        s = LevelState(state=state)
-        s.set_tile(player_pos, Tile.PLAYER)
-        s = LevelState(state=s, move=Move.CHANGE)
-        if s.outcome == MoveOutcome.CHANGED:
-            moves.insert(0, Move.CHANGE)
-            state.active_player = state.active_player.change()
-            return True
+        # Movement
+        if running_config.moves == 0:
+            player_pos = state.exit_pos
         else:
+            player_pos = state.player_pos()
+
+            # Change
+            if running_config.changes > 0:
+                changed_tile = state.changed_tile(player_pos)
+                if changed_tile not in [Tile.BLOCK, Tile.ENEMY, Tile.SPIRAL]:
+                    actions.append(GeneratorChangeAction())
+
+        actions.extend(self.expand_moves(state, player_pos))
+
+        return actions
+
+    def is_done(self, state: LevelState, actions: List[GeneratorAction], config: LevelSearcherConfig) -> bool:
+        moves = GeneratorAction.get_moves(actions)
+        if len(moves) != config.move_count:
             return False
 
-    def add_move(self, state: LevelState, moves: List[Move], player_start_pos: Position, block: Set[Tuple[Move, Position]]) -> Tuple[bool, Position, Tuple[Move, Position]]:
-        r = random.random()
+        if config.spirals > 0:
+            return False
 
-        success = False
-        pos = player_start_pos
-        move = Move.CHANGE
-        source = (-1, -1)
+        if config.enemies > 0:
+            return False
 
-        if r > 0.9 and len(self.moves) > 0 and self.moves[0] != Move.CHANGE:
-            success = self.add_change(state, moves, player_start_pos)
-        else:
-            success, pos, choice = self.add_movement(state, moves, player_start_pos, block)
-            if choice is not None:
-                move = choice[0]
-                source = choice[1]
+        if config.changes > 0:
+            return False
 
-        return (success, pos, (move, source))
+        # Check if moves lead to winning.
+        s = state
+        winning = False
+        outcome = MoveOutcome.NOTHING
+        for m in moves:
+            s = LevelState(state=s, move=m)
+            outcome = s.outcome
+ 
+        if outcome != MoveOutcome.PLAYER_WON:
+            return False
+
+        # Check if there is any shorter way
+        bot = BotPlayer(copy.deepcopy(state), state.player_pos(), len(moves))
+        shortest_path = bot.search_path_ids()
+
+        # No solution found!
+        if not shortest_path:
+            return False
+
+        if len(shortest_path) != config.move_count:
+            return False
+
+        return True
+
+    def search(self):
+        result = None
+
+        while result is None:
+            self.max_depth += 1
+            result = self.inner_search(self.config)
+
+        return (self.level, GeneratorAction.get_moves(result))
+        
+    def inner_search(self, running_config: LevelSearcherConfig, depth: int = 0, actions: List[GeneratorAction] = []) -> List[GeneratorAction]:
+        # IDS search
+        if depth > self.max_depth:
+            return None
+        
+        # If we are done, return and end search
+        if self.is_done(self.level, actions, running_config):
+            return actions
+
+        # If we still have to search, expand actions.
+        available_actions = self.expand(self.level, running_config)
+
+        # Select random action, apply it and do recursion.
+        while len(available_actions) > 0:
+            selected_action = random.choice(available_actions)
+            available_actions.remove(selected_action)
+            actions.insert(0, selected_action)
+
+            selected_action.do(self.level, running_config)
+
+            search_result = self.inner_search(running_config, depth + 1, actions)
+            if search_result is not None:
+                return search_result
+            else:
+                selected_action.undo(self.level, running_config)
+                actions.pop(0)
+
+        return None
+    
+class LevelDescription:
+    width = 4
+    height = 4
+    enable_spiral = False
+    enable_enemy = False
+
+    start_state: LevelState
+
+    def __init__(self, width : int = 4, height : int = 4, enable_spiral : bool = False, enable_enemy : bool = False, changes: int = 1, blocks: int = 1):
+        self.width = width
+        self.height = height
+        self.enable_spiral = enable_spiral
+        self.enable_enemy = enable_enemy
+        self.changes = changes
+        self.blocks = blocks
 
     def generate_with_player_from_exit_pos(self, steps: int):
-        self.player_pos = self.exit_pos
-        self.moves = []
+        config = LevelSearcherConfig()
+        config.width = self.width
+        config.height = self.height
+        config.enemies = 1 if self.enable_enemy else 0
+        config.spirals = 1 if self.enable_spiral else 0
+        config.move_count = steps
+        config.changes = self.changes
+        config.blocks = self.blocks
 
-        block = set()
-        retries = 10;
-        
-        while steps > 0:
-            state = copy.deepcopy(self.state)
-
-            move_added, player_pos, choice = self.add_move(state, self.moves, self.player_pos, block)
-
-            if not move_added:
-                # No move found!
-                retries -= 1
-                if retries < 0:
-                    break
-            else:
-                assert(len(self.moves) > 0)
-                # Check if the found move really makes finding a solution harder.
-                bot = BotPlayer(copy.deepcopy(state), player_pos, len(self.moves))
-                shortest_path = bot.search_path_ids()
-                if len(shortest_path) - shortest_path.count(Move.CHANGE) == len(self.moves) - self.moves.count(Move.CHANGE):
-                    # Correct number of moves found!
-                    self.state = state
-                    self.player_pos = player_pos
-                    steps -= 1
-                    block = set()
-                else:
-                    # The number of moves does not match the expectation!
-                    block.add(choice)
-                    self.moves.pop(0)
-                    continue
-
-        if self.enable_enemy: self.add_enemy()
-        if self.enable_spiral: self.add_spiral()
-        self.state.active_player = self.state.active_player.change()
-        if self.enable_enemy: self.add_enemy()
-        if self.enable_spiral: self.add_spiral()
-        self.state.active_player = self.state.active_player.change()
-        
-        self.state.set_tile(self.player_pos, Tile.PLAYER)
+        searcher = LevelSearcher(config)
+        self.state, self.moves = searcher.search()
+        self.player_pos = self.state.player_pos()
 
     def __str__(self):
         return str(self.state) + "\n Moves: " + ", ".join(map(str, self.moves)) + "\n Start: " + str(self.player_pos)
@@ -587,13 +668,15 @@ if __name__ == "__main__":
     parser.add_argument('--width', help='level width', default=4, type=int)
     parser.add_argument('--height', help='level height', default=4, type=int)
     parser.add_argument('--steps', help='number of steps a level should take', default=5, type=int)
+    parser.add_argument('--changes', help='number of changes a level should include', default=1, type=int)
+    parser.add_argument('--blocks', help='number of randomly set blocks a level may include', default=1, type=int)
     parser.add_argument('--enable-spiral', help='enable the spiral tile type', default=False, action="store_true")
     parser.add_argument('--enable-enemy', help='enable the enemy entity', default=False, action="store_true")
     parser.add_argument('--print-list', help='print output to list. First section is white board, second is black.', default=False, action="store_true")
     parser.add_argument('--print-human-readable', help='print human readable output', default=True, action="store_true")
     args = parser.parse_args()
 
-    level = LevelDescription(width=args.width, height=args.height, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral)
+    level = LevelDescription(width=args.width, height=args.height, enable_enemy=args.enable_enemy, enable_spiral=args.enable_spiral, changes=args.changes, blocks=args.blocks)
     level.generate_with_player_from_exit_pos(args.steps)
 
     if args.print_human_readable:
