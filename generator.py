@@ -3,7 +3,7 @@ import argparse
 from enum import Enum
 import copy
 import random
-from typing import List, Tuple, Callable
+from typing import List, Tuple, Callable, Set
 
 Position = Tuple[int, int]
 
@@ -272,6 +272,68 @@ class LevelState:
         s += "\n\n"
         s += str(self.exit_pos[0]) + "," + str(self.exit_pos[1])
         return s
+
+class BotPlayerSearcher:
+    def __init__(self, state: LevelState, start_pos: Position, max_depth: int):
+        assert(start_pos[0] >= 0 and start_pos[0] < state.width)
+        assert(start_pos[1] >= 0 and start_pos[1] < state.height)
+        assert(state is not None)
+        
+        self.state = state;
+        self.state.set_tile(start_pos, Tile.PLAYER)
+        self.path = []
+        self.max_depth = max_depth
+
+    def do_search(self):
+        assert(self.state is not None)
+        return self.search(self.state, 0)
+
+    def search(self, state: LevelState, depth: int ):
+        assert(state is not None)
+
+        if depth > self.max_depth:
+            return None
+        if state.outcome == MoveOutcome.PLAYER_WON:
+            return state
+        if state.outcome.is_ending():
+            return None
+
+        for move in Move:
+            next_state = LevelState(state, move)
+            assert(next_state is not None)
+            self.path.append(move)
+            next_step = self.search(next_state, len(self.path))
+            if next_step is not None:
+                return next_step
+            self.path.pop()
+
+        return None
+    
+class BotPlayer:
+    def __init__(self, state: LevelState, start_pos: Position = None, desired_depth: int = -1):
+        if start_pos is None:
+            self.start_pos = state.player_pos()
+        else:
+            self.start_pos = start_pos
+
+        assert(self.start_pos[0] >= 0 and self.start_pos[0] < state.width)
+        assert(self.start_pos[1] >= 0 and self.start_pos[1] < state.height)
+        assert(state is not None)
+        
+        self.state = state;
+
+        self.desired_depth = desired_depth
+
+    def search_path_ids(self):
+        for max_depth in range(1, 100):
+            searcher = BotPlayerSearcher(self.state, self.start_pos, max_depth)
+            if searcher.do_search() is not None:
+                return searcher.path
+
+        # Searcher should ALWAYS find a solution!
+        assert(False)
+        return False
+
  
 class LevelDescription:
     width = 4
@@ -297,7 +359,7 @@ class LevelDescription:
 
         self.state = LevelState(width=width, height=height, exit_pos=self.exit_pos)
 
-    def compute_possible_sources(self, player_pos, state):
+    def compute_possible_sources(self, player_pos, state, block: Set[Tuple[Move, Position]]):
         sources = []
         
         left = player_pos[0] > 0 and 0 <= player_pos[1] and player_pos[1] < self.height
@@ -305,76 +367,72 @@ class LevelDescription:
         up = player_pos[1] > 0 and 0 <= player_pos[0] and player_pos[0] < self.width
         down = player_pos[1] < self.height and 0 <= player_pos[0] and player_pos[0] < self.width
 
-        next_move = Move.CHANGE
-        if len(self.moves) > 0:
-            next_move = self.moves[0]
-
-        if left and next_move not in [Move.RIGHT, Move.LEFT]:
+        if left:
             for x in range (0, player_pos[0]):
-                if self.state.is_stopping((x, player_pos[1])) or self.state.is_killing((x, player_pos[1])):
+                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])) or (Move.RIGHT, (x, player_pos[1])) in block:
                     continue
                 sources.append(((x, player_pos[1]), (player_pos[0] + 1, player_pos[1]), Move.RIGHT))
-        if right and next_move not in [Move.RIGHT, Move.LEFT]:
+        if right:
             for x in range (player_pos[0], self.width):
-                if self.state.is_stopping((x, player_pos[1])) or self.state.is_killing((x, player_pos[1])):
+                if state.is_stopping((x, player_pos[1])) or state.is_killing((x, player_pos[1])) or (Move.LEFT, (x, player_pos[1])) in block:
                     continue
                 sources.append(((x, player_pos[1]), (player_pos[0] - 1, player_pos[1]), Move.LEFT))
-        if up and next_move not in [Move.UP, Move.DOWN]:
+        if up:
             for y in range (0, player_pos[1]):
-                if self.state.is_stopping((player_pos[0], y)) or self.state.is_killing((player_pos[0], y)):
+                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)) or (Move.DOWN, (player_pos[0], y)) in block:
                     continue
                 sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] + 1), Move.DOWN))
-        if down and next_move not in [Move.UP, Move.DOWN]:
+        if down:
             for y in range (player_pos[1], self.height):
-                if self.state.is_stopping((player_pos[0], y)) or self.state.is_killing((player_pos[0], y)):
+                if state.is_stopping((player_pos[0], y)) or state.is_killing((player_pos[0], y)) or (Move.UP, (player_pos[0], y)) in block:
                     continue
                 sources.append(((player_pos[0], y), (player_pos[0], player_pos[1] - 1), Move.UP))
 
         interestingness = []
         for source in sources:
-            interestingness.append(self.state.tile(source[1]) != Tile.OUT_OF_BOUNDS)
+            interestingness.append(state.tile(source[1]) != Tile.OUT_OF_BOUNDS)
 
         return (sources, interestingness);
 
-    def add_movement(self) -> bool:
-        sources, interestingness = self.compute_possible_sources(self.player_pos, self.state)
+    def add_movement(self, state: LevelState, moves: List[Move], player_pos: Position, block: Set[Tuple[Move, Position]]) -> Tuple[bool, Position, Tuple[Move, Position]]:
+        sources, interestingness = self.compute_possible_sources(player_pos, state, block)
         source, stopper, move = ((0, 0), (0, 0), Move.UP)
 
         while True:
             if len(sources) == 0:
-                return False
-            
+                return (False, None, None)
+
             choice = random.choices(sources,weights=interestingness)[0]
-            source, stopper, move = choice
+            source = choice[0]
+            stopper = choice[1]
+            move = choice[2]
             interestingness_index = sources.index(choice)
 
-            new_state = LevelState(state=self.state)
+            new_state = LevelState(state=state)
             if new_state.tile(stopper) != Tile.OUT_OF_BOUNDS:
                 new_state.set_tile(stopper, Tile.BLOCK)
 
             new_state.set_tile(source, Tile.PLAYER)
 
-            moves = self.moves.copy()
             moves.insert(0, move)
 
             # Try if level can still be solved
             s = new_state
-            for move in moves:
-                s = LevelState(state=s, move=move)
+            for m in moves:
+                s = LevelState(state=s, move=m)
                 if s.outcome == MoveOutcome.NOTHING:
                     break
 
             if s.outcome == MoveOutcome.PLAYER_WON:
-                self.moves = moves
-                if self.state.tile(stopper) != Tile.OUT_OF_BOUNDS:
-                    self.state.set_tile(stopper, Tile.BLOCK)
+                if state.tile(stopper) != Tile.OUT_OF_BOUNDS:
+                    state.set_tile(stopper, Tile.BLOCK)
                 break
             else:
+                moves.pop(0)
                 sources.remove(choice)
                 interestingness.pop(interestingness_index)
 
-        self.player_pos = source
-        return True
+        return (True, source, (move, source))
 
     def add_enemy(self) -> bool:
         choices = []
@@ -446,30 +504,71 @@ class LevelDescription:
             else:
                 choices.remove(choice)
 
-    def add_change(self):
-        s = LevelState(state=self.state)
-        s.set_tile(self.player_pos, Tile.PLAYER)
+    def add_change(self, state: LevelState, moves: List[Move], player_pos: Position):
+        assert(state is not None)
+        assert(player_pos is not None)
+
+        s = LevelState(state=state)
+        s.set_tile(player_pos, Tile.PLAYER)
         s = LevelState(state=s, move=Move.CHANGE)
         if s.outcome == MoveOutcome.CHANGED:
-            self.moves.insert(0, Move.CHANGE)
-            self.state.active_player = self.state.active_player.change()
+            moves.insert(0, Move.CHANGE)
+            state.active_player = state.active_player.change()
             return True
         else:
             return False
+
+    def add_move(self, state: LevelState, moves: List[Move], player_start_pos: Position, block: Set[Tuple[Move, Position]]) -> Tuple[bool, Position, Tuple[Move, Position]]:
+        r = random.random()
+
+        success = False
+        pos = player_start_pos
+        move = Move.CHANGE
+        source = (-1, -1)
+
+        if r > 0.9 and len(self.moves) > 0 and self.moves[0] != Move.CHANGE:
+            success = self.add_change(state, moves, player_start_pos)
+        else:
+            success, pos, choice = self.add_movement(state, moves, player_start_pos, block)
+            if choice is not None:
+                move = choice[0]
+                source = choice[1]
+
+        return (success, pos, (move, source))
 
     def generate_with_player_from_exit_pos(self, steps: int):
         self.player_pos = self.exit_pos
         self.moves = []
 
+        block = set()
+        retries = 10;
+        
         while steps > 0:
-            r = random.random()
+            state = copy.deepcopy(self.state)
 
-            if r > 0.9 and len(self.moves) > 0 and self.moves[0] != Move.CHANGE:
-                self.add_change()
+            move_added, player_pos, choice = self.add_move(state, self.moves, self.player_pos, block)
+
+            if not move_added:
+                # No move found!
+                retries -= 1
+                if retries < 0:
+                    break
             else:
-                self.add_movement()
-
-            steps -= 1
+                assert(len(self.moves) > 0)
+                # Check if the found move really makes finding a solution harder.
+                bot = BotPlayer(copy.deepcopy(state), player_pos, len(self.moves))
+                shortest_path = bot.search_path_ids()
+                if len(shortest_path) - shortest_path.count(Move.CHANGE) == len(self.moves) - self.moves.count(Move.CHANGE):
+                    # Correct number of moves found!
+                    self.state = state
+                    self.player_pos = player_pos
+                    steps -= 1
+                    block = set()
+                else:
+                    # The number of moves does not match the expectation!
+                    block.add(choice)
+                    self.moves.pop(0)
+                    continue
 
         if self.enable_enemy: self.add_enemy()
         if self.enable_spiral: self.add_spiral()

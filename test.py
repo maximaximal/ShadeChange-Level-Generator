@@ -52,5 +52,14 @@ class TestLevelState(unittest.TestCase):
         new_state = generator.LevelState(state=state, move=generator.Move.UP)
         self.assertEqual(new_state.outcome, generator.MoveOutcome.ENEMY_WON)
 
+    def test_bot_player_finds_win(self):
+        state = generator.LevelState(width=4, height=4, exit_pos=(0, -1))
+        state.set_tile((1, 0), generator.Tile.BLOCK)
+        state.set_tile((3, 0), generator.Tile.PLAYER)
+        expected_moves = [generator.Move.DOWN, generator.Move.LEFT, generator.Move.UP]
+        bot = generator.BotPlayer(state)
+        found_path = bot.search_path_ids()
+        self.assertEqual(found_path, expected_moves)
+
 if (__name__ == '__main__'):
     unittest.main()
